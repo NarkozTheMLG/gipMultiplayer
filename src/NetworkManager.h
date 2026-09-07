@@ -97,13 +97,23 @@ public:
     std::string getPlayerName(uint32_t netId) const;
 
     // Callbacks for UI
-    void setOnServerQueried(std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool)> cb) { onServerQueried = cb; }
+    void setOnServerQueried(std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool, bool)> cb) { onServerQueried = cb; }
     void setOnLobbyStateUpdated(std::function<void(std::shared_ptr<LobbyStatePacket>)> cb) { onLobbyStateUpdated = cb; }
     void setOnMatchStarted(std::function<void()> cb) { onMatchStarted = cb; }
-    void setOnDisconnected(std::function<void()> cb) { onDisconnected = cb; }
+    // A disconnect can land while nothing is listening: the lobby canvas clears
+    // its handler on the way out and the game canvas only registers its own in
+    // setup(). Dropping it there left the client sitting in a match against a
+    // server that was gone, so it is held and delivered to the next handler.
+    void setOnDisconnected(std::function<void()> cb) {
+        onDisconnected = std::move(cb);
+        if (onDisconnected && disconnectPending) {
+            disconnectPending = false;
+            onDisconnected();
+        }
+    }
     void setOnKicked(std::function<void(std::string)> cb) { onKicked = cb; }
 
-    std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool)> onServerQueried;
+    std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool, bool)> onServerQueried;
     std::function<void(std::shared_ptr<LobbyStatePacket>)> onLobbyStateUpdated;
     std::function<void()> onMatchStarted;
     std::function<void()> onDisconnected;
@@ -137,7 +147,8 @@ public:
     // Called by the packet handlers in NetworkManager.cpp, from network
     // threads. Both only queue, so the main thread is the one that acts.
     void pushQueryResult(const std::string& name, const std::string& format, const std::string& sizeStr,
-                         const std::string& ip, const std::string& realIp, bool isDedicated, bool useP2P);
+                         const std::string& ip, const std::string& realIp, bool isDedicated, bool useP2P,
+                         bool matchInProgress = false);
     void setAuthResult(AuthStatus status, const std::string& message, const std::string& username = "");
     void onAuthSuccess(const std::string& username, const std::string& token);
 
@@ -164,6 +175,9 @@ private:
     uint64_t joinGeneration = 0;
     std::shared_ptr<GameBackend> backend;
     bool wantsDisconnect = false;
+    // A disconnect that arrived with no handler registered, replayed by
+    // setOnDisconnected once one is.
+    bool disconnectPending = false;
 
     struct QueryResult {
         std::string name;
@@ -173,6 +187,7 @@ private:
         std::string realIp;
         bool isDedicated;
         bool useP2P;
+        bool matchInProgress;
     };
     std::mutex queryMutex;
     std::vector<QueryResult> pendingQueries;

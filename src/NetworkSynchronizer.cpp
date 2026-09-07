@@ -29,8 +29,12 @@ void NetworkSynchronizer::setup() {
 
     // Boxes from an earlier match would otherwise be drawn for a lobby that
     // never joined them.
-    remotemultiplayerboxes.clear();
-    remoteteams.clear();
+    {
+        std::lock_guard<std::mutex> lock(playersmutex);
+        remotemultiplayerboxes.clear();
+        remoteteams.clear();
+        playersnapshot.clear();
+    }
     networktimer = 0.0f;
 
     localmultiplayerbox->setScale(0.12f);
@@ -48,7 +52,10 @@ void NetworkSynchronizer::setup() {
     backend->setLocalTeam(myTeam);
 
     backend->setOnTeamChanged([this](uint32_t id, uint8_t teamId) {
-        remoteteams[id] = teamId;
+        {
+            std::lock_guard<std::mutex> lock(playersmutex);
+            remoteteams[id] = teamId;
+        }
         std::cout << "Multiplayer: Remote Player " << id << " switched to Team " << (int)teamId << std::endl;
     });
 
@@ -57,17 +64,21 @@ void NetworkSynchronizer::setup() {
         if (!backend) return;
         if (id == localmultiplayerboxid) return;
 
-        auto box = std::make_shared<gBox>();
+        auto box = std::make_shared<gNode>();
         box->setScale(0.12f);
         box->setPosition(1.5f, 0.25f, 1.5f);
 
         backend->attachNode(id, box, false);
-        remotemultiplayerboxes[id] = std::move(box);
+        {
+            std::lock_guard<std::mutex> lock(playersmutex);
+            remotemultiplayerboxes[id] = std::move(box);
+        }
     });
 
     backend->setOnLeave([this](uint32_t id) {
         auto backend = NetworkManager::getInstance()->getBackend();
         if (backend) backend->detachNode(id);
+        std::lock_guard<std::mutex> lock(playersmutex);
         remotemultiplayerboxes.erase(id);
         remoteteams.erase(id);
     });
@@ -96,6 +107,49 @@ void NetworkSynchronizer::update(float deltaTime, float cameraX, float cameraY, 
         backend->setLocalYaw(localmultiplayerboxid, cameraYaw);
         backend->setLocalAnimState(localmultiplayerboxid, animState);
     }
+
+    publishSnapshot(backend);
+}
+
+// Rebuilt once per update() so readers on other threads never walk the live
+// containers. Built in two locked steps rather than one, so the backend is
+// never queried while playersmutex is held.
+void NetworkSynchronizer::publishSnapshot(const std::shared_ptr<GameBackend>& backend) {
+    std::vector<RemotePlayerState> next;
+    {
+        std::lock_guard<std::mutex> lock(playersmutex);
+        next.reserve(remotemultiplayerboxes.size());
+        for (const auto& kv : remotemultiplayerboxes) {
+            if (!kv.second) continue;
+            RemotePlayerState state;
+            state.id = kv.first;
+            state.x = kv.second->getPosX();
+            state.y = kv.second->getPosY();
+            state.z = kv.second->getPosZ();
+            auto team = remoteteams.find(kv.first);
+            state.team = team != remoteteams.end() ? team->second : 1;
+            next.push_back(state);
+        }
+    }
+
+    for (auto& state : next) {
+        state.yaw = backend->getRemoteYaw(state.id);
+        state.animState = backend->getRemoteAnimState(state.id);
+    }
+
+    std::lock_guard<std::mutex> lock(playersmutex);
+    playersnapshot.swap(next);
+}
+
+std::vector<NetworkSynchronizer::RemotePlayerState> NetworkSynchronizer::getRemotePlayerStates() const {
+    std::lock_guard<std::mutex> lock(playersmutex);
+    return playersnapshot;
+}
+
+uint8_t NetworkSynchronizer::getRemoteTeam(uint32_t id) const {
+    std::lock_guard<std::mutex> lock(playersmutex);
+    auto it = remoteteams.find(id);
+    return it != remoteteams.end() ? it->second : 1;
 }
 
 
@@ -113,11 +167,20 @@ void NetworkSynchronizer::cleanup() {
     if (!backend) return;
 
     backend->detachNode(localmultiplayerboxid);
-    for (auto& kv : remotemultiplayerboxes) {
-        backend->detachNode(kv.first);
+
+    // Ids are collected first so detachNode, which takes the backend's own
+    // lock, is never called while playersmutex is held.
+    std::vector<uint32_t> detachids;
+    {
+        std::lock_guard<std::mutex> lock(playersmutex);
+        detachids.reserve(remotemultiplayerboxes.size());
+        for (const auto& kv : remotemultiplayerboxes) detachids.push_back(kv.first);
+        remotemultiplayerboxes.clear();
+        remoteteams.clear();
+        playersnapshot.clear();
     }
-    remotemultiplayerboxes.clear();
-    remoteteams.clear();
+
+    for (uint32_t id : detachids) backend->detachNode(id);
 }
 
 void NetworkSynchronizer::sendFireEvent(uint8_t gunType, float ox, float oy, float oz, float dx, float dy, float dz) {

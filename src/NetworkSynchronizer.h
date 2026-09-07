@@ -1,12 +1,24 @@
 #pragma once
 
 #include "NetworkManager.h"
-#include "gBox.h"
+#include "gNode.h"
+#include <mutex>
 #include <unordered_map>
 #include <memory>
+#include <vector>
 
 class NetworkSynchronizer {
 public:
+    // A remote player as of the last update(), copied out under lock. Readers
+    // on any thread get a consistent view that nothing else can mutate.
+    struct RemotePlayerState {
+        uint32_t id = 0;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        float yaw = 0.0f;
+        uint8_t animState = 0;
+        uint8_t team = 1;
+    };
+
     static NetworkSynchronizer* getInstance();
 
     uint32_t getLocalNodeId() const { return localmultiplayerboxid; }
@@ -24,12 +36,15 @@ public:
     // Example feature: switch teams
     void switchTeam();
 
-    const std::unordered_map<uint32_t, std::shared_ptr<gBox>>& getRemotePlayers() const { return remotemultiplayerboxes; }
-    
-    uint8_t getRemoteTeam(uint32_t id) const {
-        auto it = remoteteams.find(id);
-        return it != remoteteams.end() ? it->second : 1;
-    }
+    // Safe from any thread: returns a copy of the snapshot published by the
+    // last update(). Prefer this over getRemotePlayers().
+    std::vector<RemotePlayerState> getRemotePlayerStates() const;
+
+    // Legacy accessor. Hands out a reference to the live map, which onJoin and
+    // onLeave mutate, so it is only valid on the thread that drives update().
+    const std::unordered_map<uint32_t, std::shared_ptr<gNode>>& getRemotePlayers() const { return remotemultiplayerboxes; }
+
+    uint8_t getRemoteTeam(uint32_t id) const;
 
     void sendFireEvent(uint8_t gunType, float ox, float oy, float oz, float dx, float dy, float dz);
     void sendHitEvent(uint32_t victimId, float damage);
@@ -44,12 +59,20 @@ private:
     NetworkSynchronizer();
     ~NetworkSynchronizer() = default;
 
-    uint32_t localmultiplayerboxid = 0;
-    std::shared_ptr<gBox> localmultiplayerbox = std::make_shared<gBox>();
+    void publishSnapshot(const std::shared_ptr<GameBackend>& backend);
 
-    std::unordered_map<uint32_t, std::shared_ptr<gBox>> remotemultiplayerboxes;
-    float networktimer = 0.0f;
+    uint32_t localmultiplayerboxid = 0;
+    std::shared_ptr<gNode> localmultiplayerbox = std::make_shared<gNode>();
+
+    // playersmutex guards remotemultiplayerboxes, remoteteams and playersnapshot.
+    // The gNode objects themselves are only ever touched by the thread that
+    // drives update(): GameBackend lerps them, publishSnapshot() copies them out.
+    // Readers on other threads see the snapshot, never the nodes.
+    mutable std::mutex playersmutex;
+    std::unordered_map<uint32_t, std::shared_ptr<gNode>> remotemultiplayerboxes;
     std::unordered_map<uint32_t, uint8_t> remoteteams;
+    std::vector<RemotePlayerState> playersnapshot;
+    float networktimer = 0.0f;
 
     std::function<void(uint32_t, uint8_t, float, float, float, float, float, float)> onRemoteFire;
     std::function<void(uint32_t, uint32_t, float)> onRemoteHit;
