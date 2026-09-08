@@ -16,6 +16,7 @@
 #include "znet/packet_serializer.h"
 #include "znet/buffer.h"
 #include "znet/peer_session.h"
+#include "gipMultiplayerTypes.h"
 
 // Packet IDs - must be unique per packet type
 enum : znet::PacketId {
@@ -34,7 +35,10 @@ enum : znet::PacketId {
     PACKET_LOBBY_KICK,
     PACKET_KEEPALIVE,
     PACKET_PING,
-    PACKET_PONG
+    PACKET_PONG,
+    // Appended deliberately: ids are positional, so a new id anywhere above
+    // this line silently renumbers every packet after it.
+    PACKET_CHAT_MESSAGE
 };
 
 class KeepAlivePacket : public znet::Packet {
@@ -417,6 +421,39 @@ public:
         p->reason = b->ReadString();
         return p;
     }
+};
+
+// One text message travelling client -> host -> recipients. CHAT_SYSTEM and
+// CHAT_KILL never appear on the wire; clients generate those locally.
+class ChatMessagePacket : public znet::Packet {
+public:
+	ChatMessagePacket() : Packet(PACKET_CHAT_MESSAGE) {}
+	uint32_t senderId = 0;
+	uint32_t targetId = 0;   // CHAT_PRIVATE only, 0 otherwise
+	uint8_t channel = CHAT_ALL;
+	std::string senderName;  // stamped by the host, never trusted from a client
+	std::string text;
+};
+
+class ChatMessageSerializer : public znet::PacketSerializer<ChatMessagePacket> {
+public:
+	std::shared_ptr<znet::Buffer> SerializeTyped(std::shared_ptr<ChatMessagePacket> p, std::shared_ptr<znet::Buffer> b) override {
+		b->WriteInt<uint32_t>(p->senderId);
+		b->WriteInt<uint32_t>(p->targetId);
+		b->WriteInt<uint8_t>(p->channel);
+		b->WriteString(p->senderName);
+		b->WriteString(p->text);
+		return b;
+	}
+	std::shared_ptr<ChatMessagePacket> DeserializeTyped(std::shared_ptr<znet::Buffer> b) override {
+		auto p = std::make_shared<ChatMessagePacket>();
+		p->senderId = b->ReadInt<uint32_t>();
+		p->targetId = b->ReadInt<uint32_t>();
+		p->channel = b->ReadInt<uint8_t>();
+		p->senderName = b->ReadString();
+		p->text = b->ReadString();
+		return p;
+	}
 };
 
 #endif //GAMEPACKETS_H

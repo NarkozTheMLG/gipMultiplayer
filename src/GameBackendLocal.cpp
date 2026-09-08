@@ -130,6 +130,7 @@ static std::shared_ptr<znet::Codec> makeCodec() {
 	codec->Add(PACKET_KEEPALIVE, std::make_unique<KeepAliveSerializer>());
 	codec->Add(PACKET_PING, std::make_unique<PingSerializer>());
 	codec->Add(PACKET_PONG, std::make_unique<PongSerializer>());
+	codec->Add(PACKET_CHAT_MESSAGE, std::make_unique<ChatMessageSerializer>());
 
 	// Voice Packets
 	codec->Add(G_TEAM_VOICE_SESSION_PACKET_ID, std::make_unique<gTeamVoiceSessionSerializer>());
