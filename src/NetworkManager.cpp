@@ -2,6 +2,7 @@
 #include "GameBackend.h"
 #include "GameBackendLocal.h"
 #include "GameBackendRemote.h"
+#include "chat/ChatManager.h"
 #include <thread>
 #include "NetworkSynchronizer.h" // For getLocalNodeId
 #include <random>
@@ -277,8 +278,11 @@ void NetworkManager::disconnect() {
 }
 
 void NetworkManager::update(float deltaTime) {
+    ChatManager::getInstance()->update(deltaTime);
+
     if (wantsDisconnect) {
         setBackend(nullptr);
+        ChatManager::getInstance()->clear();
         wantsDisconnect = false;
         if (onDisconnected) onDisconnected();
     }

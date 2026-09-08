@@ -21,7 +21,7 @@ constexpr uint64_t LOCAL_HOST_VOICE_CONN_ID = 0xFFFFFFFFFFFFFFFFULL;
 class ServerPacketHandler : public znet::PacketHandler<ServerPacketHandler,
 	NodeStatePacket, NodeLeavePacket, PlayerFirePacket, PlayerHitPacket, PlayerKilledPacket,
 	ServerQueryReqPacket, LobbyJoinPacket, ToggleReadyPacket, SwitchTeamPacket, StartMatchPacket,
-	KeepAlivePacket, PingPacket, PongPacket, gTeamVoiceUplinkPacket> {
+	KeepAlivePacket, PingPacket, PongPacket, ChatMessagePacket, gTeamVoiceUplinkPacket> {
 public:
 	ServerPacketHandler(GameBackendLocal* b, znet::PeerSession* s) : backend(b), peersession(s) {}
 
@@ -93,6 +93,16 @@ public:
 
 	void OnPacket(std::shared_ptr<PongPacket> p) {
 		backend->onPongReceived(p->timestamp);
+	}
+
+	void OnPacket(std::shared_ptr<ChatMessagePacket> p) {
+		// Anti-spoof: the sender is whoever this session was tagged as, never
+		// what the packet claims. Nothing else happens on the network thread -
+		// routing needs roomPlayers, which is main-thread only.
+		if (auto idptr = peersession->template user_pointer<uint32_t>()) {
+			p->senderId = *idptr;
+		}
+		backend->enqueuePacket(std::static_pointer_cast<znet::Packet>(p));
 	}
 
 	// Voice Uplink from remote client
@@ -467,6 +477,42 @@ void GameBackendLocal::broadcast(const std::shared_ptr<znet::Packet>& packet, zn
 	std::lock_guard<std::mutex> lk(sessionsmutex);
 	for (auto& s : sessions) {
 		if (s && s.get() != exclude) s->SendPacket(packet);
+	}
+}
+
+void GameBackendLocal::sendToPlayer(uint32_t netId, const std::shared_ptr<znet::Packet>& packet) {
+	std::lock_guard<std::mutex> lk(sessionsmutex);
+	for (auto& s : sessions) {
+		if (!s) continue;
+		auto idptr = s->template user_pointer<uint32_t>();
+		if (idptr && *idptr == netId) {
+			s->SendPacket(packet);
+			return;
+		}
+	}
+}
+
+void GameBackendLocal::relayChat(const std::shared_ptr<ChatMessagePacket>& p) {
+	if (p->channel == CHAT_ALL) {
+		// Not excluding the sender: that is how a client sees its own message.
+		broadcast(p);
+		return;
+	}
+	if (p->channel == CHAT_TEAM) {
+		uint8_t senderTeam = 0;
+		bool found = false;
+		for (const auto& rp : roomPlayers) {
+			if (rp.id == p->senderId) { senderTeam = rp.team; found = true; break; }
+		}
+		if (!found) return;
+		for (const auto& rp : roomPlayers) {
+			if (rp.team == senderTeam) sendToPlayer(rp.id, p);
+		}
+		return;
+	}
+	if (p->channel == CHAT_PRIVATE) {
+		sendToPlayer(p->targetId, p);
+		if (p->senderId != p->targetId) sendToPlayer(p->senderId, p);
 	}
 }
 

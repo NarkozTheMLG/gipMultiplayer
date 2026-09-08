@@ -18,7 +18,10 @@
 #include "GamePackets.h"
 #include "gNode.h"
 #include "gipMultiplayerTypes.h"
+#include "chat/ChatManager.h"
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <vector>
 #include <unordered_map>
@@ -159,6 +162,18 @@ protected:
 	virtual void broadcastFireEvent(uint32_t shooterId, uint8_t gunType, float ox, float oy, float oz, float dx, float dy, float dz) = 0;
 	virtual void broadcastHitEvent(uint32_t attackerId, uint32_t victimId, float damage) = 0;
 	virtual void broadcastKillEvent(uint32_t killerId, uint32_t victimId) = 0;
+
+	// Host-only fan-out. A client receives only what was routed to it, so its
+	// implementation does nothing.
+	virtual void relayChat(const std::shared_ptr<ChatMessagePacket>& p) {}
+	// True when this peer is a legitimate recipient of the message. On a client
+	// that is always true; the host has to check, because every channel passes
+	// through its own onPacketReceived on the way to being routed.
+	bool shouldDisplayChat(const std::shared_ptr<ChatMessagePacket>& p) const;
+
+	bool allowChatRate(uint32_t senderId);
+	// Main thread only, touched from onPacketReceived alone.
+	std::unordered_map<uint32_t, std::vector<float>> chatRateStamps;
 
 protected:
 	std::mutex queueMutex;

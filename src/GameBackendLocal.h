@@ -67,6 +67,11 @@ protected:
 	void broadcastHitEvent(uint32_t attackerId, uint32_t victimId, float damage) override;
 	void broadcastKillEvent(uint32_t killerId, uint32_t victimId) override;
 
+	void relayChat(const std::shared_ptr<ChatMessagePacket>& p) override;
+	// Sends to one player's session. Does nothing for the host's own id: the
+	// host has no session to itself and is delivered to directly.
+	void sendToPlayer(uint32_t netId, const std::shared_ptr<znet::Packet>& packet);
+
 protected:
 	void broadcast(const std::shared_ptr<znet::Packet>& packet, znet::PeerSession* exclude = nullptr);
 

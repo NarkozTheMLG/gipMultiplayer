@@ -1,5 +1,6 @@
 #include "GameBackend.h"
 #include "NetworkManager.h"
+#include "NetworkSynchronizer.h"
 #include <chrono>
 
 GameBackend::GameBackend() {
@@ -159,6 +160,38 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 		return;
 	}
 
+	if (packet->id() == PACKET_CHAT_MESSAGE) {
+		auto p = std::static_pointer_cast<ChatMessagePacket>(packet);
+		if (p->text.empty()) return;
+		if (p->text.size() > ChatManager::MAX_TEXT_LENGTH) p->text.resize(ChatManager::MAX_TEXT_LENGTH);
+
+		if (isServer()) {
+			// The host is the only peer that routes, so it is the only one that
+			// has to validate. Name and team are read from roomPlayers, which is
+			// why this runs here on the main thread and not in the handler.
+			const RoomPlayerInfo* sender = nullptr;
+			for (const auto& rp : roomPlayers) {
+				if (rp.id == p->senderId) { sender = &rp; break; }
+			}
+			if (!sender) return;
+			if (!allowChatRate(p->senderId)) return;
+			if (p->channel == CHAT_PRIVATE) {
+				bool targetExists = false;
+				for (const auto& rp : roomPlayers) {
+					if (rp.id == p->targetId) { targetExists = true; break; }
+				}
+				if (!targetExists) return;
+			}
+			p->senderName = sender->name;
+			relayChat(p);
+		}
+
+		if (shouldDisplayChat(p)) {
+			ChatManager::getInstance()->receive(p->channel, p->senderId, p->senderName, p->text);
+		}
+		return;
+	}
+
 	if (packet->id() == PACKET_LOBBY_STATE) {
 		auto p = std::static_pointer_cast<LobbyStatePacket>(packet);
 		roomPlayers.clear();
@@ -262,6 +295,35 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 }
 
 
+
+// The host sees every message before routing it, including ones meant for the
+// other team or for two other players. Without this it would display them all.
+bool GameBackend::shouldDisplayChat(const std::shared_ptr<ChatMessagePacket>& p) const {
+	if (!isServer()) return true;
+	uint32_t localId = NetworkSynchronizer::getInstance()->getLocalNodeId();
+	if (p->channel == CHAT_ALL) return true;
+	if (p->channel == CHAT_TEAM) {
+		for (const auto& rp : roomPlayers) {
+			if (rp.id == p->senderId) return rp.team == localTeam;
+		}
+		return false;
+	}
+	if (p->channel == CHAT_PRIVATE) return p->targetId == localId || p->senderId == localId;
+	return false;
+}
+
+// Three messages a second per player. Enough for conversation, not enough to
+// flood every other client off the server.
+bool GameBackend::allowChatRate(uint32_t senderId) {
+	using clock = std::chrono::steady_clock;
+	float now = std::chrono::duration<float>(clock::now().time_since_epoch()).count();
+	auto& stamps = chatRateStamps[senderId];
+	stamps.erase(std::remove_if(stamps.begin(), stamps.end(),
+		[now](float t) { return now - t > 1.0f; }), stamps.end());
+	if (stamps.size() >= 3) return false;
+	stamps.push_back(now);
+	return true;
+}
 
 void GameBackend::update(float deltaTime) {
 	std::vector<std::shared_ptr<znet::Packet>> batch;
