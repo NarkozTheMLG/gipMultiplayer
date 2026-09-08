@@ -160,6 +160,12 @@ void NetworkSynchronizer::switchTeam() {
     if (backend) {
         uint8_t newTeam = backend->getLocalTeam() == 1 ? 2 : 1;
         backend->setLocalTeam(newTeam);
+        // roomPlayers is what the room list and team message routing read, and
+        // it only follows a SwitchTeamPacket. Setting localTeam alone left the
+        // two disagreeing after a switch made during a match: the player moved
+        // team for position and damage purposes while their team messages kept
+        // going to the team they had just left.
+        NetworkManager::getInstance()->switchTeam(newTeam);
     }
 }
 

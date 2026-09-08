@@ -163,6 +163,11 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 
 	if (packet->id() == PACKET_CHAT_MESSAGE) {
 		auto p = std::static_pointer_cast<ChatMessagePacket>(packet);
+		// The input box only accepts printable ASCII, but a modified client is
+		// not bound by it, so the same restriction is applied to anything that
+		// arrives over the network before it reaches a screen.
+		p->text.erase(std::remove_if(p->text.begin(), p->text.end(),
+			[](unsigned char c) { return c < 32 || c > 126; }), p->text.end());
 		if (p->text.empty()) return;
 		if (p->text.size() > ChatManager::MAX_TEXT_LENGTH) p->text.resize(ChatManager::MAX_TEXT_LENGTH);
 
