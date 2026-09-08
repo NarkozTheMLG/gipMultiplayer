@@ -256,7 +256,12 @@ void NetworkManager::wireBackend(const std::shared_ptr<GameBackend>& next) {
     next->setHearEnemiesVoice(hearEnemiesVoice.load());
     next->setOnLobbyStateUpdated([this](std::shared_ptr<LobbyStatePacket> p) {
         currentLobbyState = p;
-        if (onLobbyStateUpdated) onLobbyStateUpdated(p);
+        std::vector<RoomPlayerInfo> players;
+        players.reserve(p->playerIds.size());
+        for (size_t i = 0; i < p->playerIds.size(); i++) {
+            players.push_back({p->playerIds[i], p->playerNames[i], p->playerTeams[i], p->playerReadys[i] != 0});
+        }
+        if (onLobbyStateUpdated) onLobbyStateUpdated(players, p->isGlobalServer, p->matchInProgress);
     });
     next->setOnMatchStarted([this]() { if (onMatchStarted) onMatchStarted(); });
     next->setOnDisconnected([this]() {

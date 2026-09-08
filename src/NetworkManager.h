@@ -113,7 +113,8 @@ public:
 
     // Callbacks for UI
     void setOnServerQueried(std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool, bool)> cb) { onServerQueried = cb; }
-    void setOnLobbyStateUpdated(std::function<void(std::shared_ptr<LobbyStatePacket>)> cb) { onLobbyStateUpdated = cb; }
+    // Lobby snapshot: the player list plus the two room-wide flags.
+    void setOnLobbyStateUpdated(std::function<void(const std::vector<RoomPlayerInfo>&, bool isGlobalServer, bool matchInProgress)> cb) { onLobbyStateUpdated = cb; }
     void setOnMatchStarted(std::function<void()> cb) { onMatchStarted = cb; }
     // A disconnect can land while nothing is listening: the lobby canvas clears
     // its handler on the way out and the game canvas only registers its own in
@@ -129,7 +130,7 @@ public:
     void setOnKicked(std::function<void(std::string)> cb) { onKicked = cb; }
 
     std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool, bool)> onServerQueried;
-    std::function<void(std::shared_ptr<LobbyStatePacket>)> onLobbyStateUpdated;
+    std::function<void(const std::vector<RoomPlayerInfo>&, bool, bool)> onLobbyStateUpdated;
     std::function<void()> onMatchStarted;
     std::function<void()> onDisconnected;
     std::function<void(std::string)> onKicked;
