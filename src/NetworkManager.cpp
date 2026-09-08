@@ -1,4 +1,5 @@
 #include "NetworkManager.h"
+#include "GameBackend.h"
 #include "GameBackendLocal.h"
 #include "GameBackendRemote.h"
 #include <thread>

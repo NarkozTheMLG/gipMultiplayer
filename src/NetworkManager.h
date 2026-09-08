@@ -1,13 +1,21 @@
 #pragma once
 
-#include "GameBackend.h"
+#include "gipMultiplayerTypes.h"
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace znet {
     class Client;
+    class Packet;
 }
+
+// Transport lives behind the facade; the game never names it.
+class GameBackend;
+class LobbyStatePacket;
 
 class NetworkManager {
 public:
@@ -139,9 +147,8 @@ public:
     // uses this so its loop runs through update() like the game's does.
     void useBackend(std::shared_ptr<GameBackend> next);
 
-    // The active backend, or null when not connected. Shared, because a join
-    // running on another thread can swap it out at any moment: hold the handle
-    // for as long as you use it rather than calling this twice.
+    // Plugin-internal. Returns null when not connected. The game must use the
+    // plain-type accessors instead; nothing in game_martyr may call this.
     std::shared_ptr<GameBackend> getBackend() const;
 
     std::shared_ptr<LobbyStatePacket> currentLobbyState;

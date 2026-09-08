@@ -1,4 +1,5 @@
 #include "NetworkSynchronizer.h"
+#include "GameBackend.h"
 #include <iostream>
 #include <random>
 #include <chrono>
