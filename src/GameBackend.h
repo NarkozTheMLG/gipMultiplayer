@@ -17,6 +17,7 @@
 
 #include "GamePackets.h"
 #include "gNode.h"
+#include "gipMultiplayerTypes.h"
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -103,12 +104,8 @@ public:
 	std::function<void(std::shared_ptr<LobbyStatePacket>)> onLobbyStateUpdated;
 	std::function<void()> onMatchStarted;
 
-	struct RoomPlayerState {
-		uint32_t id;
-		std::string name;
-		uint8_t team;
-		bool isReady;
-	};
+	// Was a nested struct; now one definition shared with the game-facing API.
+	using RoomPlayerState = RoomPlayerInfo;
 	// Main thread only. Off it, read playerCount() instead.
 	std::vector<RoomPlayerState> roomPlayers;
 	bool matchInProgress = false;
