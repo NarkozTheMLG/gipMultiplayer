@@ -151,8 +151,6 @@ public:
     // plain-type accessors instead; nothing in game_martyr may call this.
     std::shared_ptr<GameBackend> getBackend() const;
 
-    std::shared_ptr<LobbyStatePacket> currentLobbyState;
-
     // Call this from the game's main update loop to process network events
     void update(float deltaTime);
 
@@ -197,6 +195,7 @@ private:
     mutable std::mutex backendMutex;
     uint64_t joinGeneration = 0;
     std::shared_ptr<GameBackend> backend;
+    std::shared_ptr<LobbyStatePacket> currentLobbyState;
     bool wantsDisconnect = false;
     // A disconnect that arrived with no handler registered, replayed by
     // setOnDisconnected once one is.
