@@ -96,6 +96,21 @@ public:
 
     std::string getPlayerName(uint32_t netId) const;
 
+    // Plain-type facade. The game uses these instead of reaching for the
+    // backend, so no transport type appears in game code.
+    bool isConnected() const;
+    uint8_t getLocalTeam() const;
+    // A copy, safe to read from any thread. roomPlayers itself is main-thread
+    // only, so handing out a reference would make that easy to violate.
+    std::vector<RoomPlayerInfo> getRoomPlayers() const;
+    // Enters a match that is already running, for global-server lobbies. This
+    // is NOT startMatch(): there is no ready-gate and no host check, and it
+    // only triggers the local match transition.
+    void enterMatchInProgress();
+    // Returns 0 when no player in the room carries that name. Case-sensitive,
+    // matching how names are compared everywhere else in the lobby.
+    uint32_t findPlayerIdByName(const std::string& name) const;
+
     // Callbacks for UI
     void setOnServerQueried(std::function<void(std::string, std::string, std::string, std::string, std::string, bool, bool, bool)> cb) { onServerQueried = cb; }
     void setOnLobbyStateUpdated(std::function<void(std::shared_ptr<LobbyStatePacket>)> cb) { onLobbyStateUpdated = cb; }

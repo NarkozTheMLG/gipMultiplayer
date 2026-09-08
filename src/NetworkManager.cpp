@@ -597,6 +597,38 @@ std::string NetworkManager::getPlayerName(uint32_t netId) const {
     return "";
 }
 
+bool NetworkManager::isConnected() const {
+    return getBackend() != nullptr;
+}
+
+uint8_t NetworkManager::getLocalTeam() const {
+    auto active = getBackend();
+    return active ? active->getLocalTeam() : 1;
+}
+
+std::vector<RoomPlayerInfo> NetworkManager::getRoomPlayers() const {
+    auto active = getBackend();
+    if (!active) return {};
+    return active->roomPlayers;
+}
+
+void NetworkManager::enterMatchInProgress() {
+    auto active = getBackend();
+    if (!active) return;
+    // Local only: it drives this client's own onMatchStarted. The host decides
+    // when the match actually begins.
+    active->enqueuePacket(std::make_shared<StartMatchPacket>());
+}
+
+uint32_t NetworkManager::findPlayerIdByName(const std::string& name) const {
+    auto active = getBackend();
+    if (!active) return 0;
+    for (const auto& rp : active->roomPlayers) {
+        if (rp.name == name) return rp.id;
+    }
+    return 0;
+}
+
 void NetworkManager::pushQueryResult(const std::string& name, const std::string& format, const std::string& sizeStr,
                                      const std::string& ip, const std::string& realIp, bool isDedicated, bool useP2P,
                                      bool matchInProgress) {
