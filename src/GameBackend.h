@@ -123,6 +123,12 @@ public:
 	int getPing() const { return currentPing.load(std::memory_order_relaxed); }
 	void onPongReceived(uint64_t timestamp);
 
+	// Every known player's ping, last relayed by the host via
+	// PlayerPingSnapshotPacket. Safe from any thread. GameBackendLocal
+	// overrides this to return its own directly-measured map instead of
+	// waiting on its own broadcast.
+	virtual std::unordered_map<uint32_t, int> getRemotePings() const;
+
 	// Voice Chat Interface
 	virtual bool initializeVoice() { return false; }
 	virtual void shutdownVoice() {}
@@ -204,6 +210,8 @@ protected:
 	float keepAliveTimer = 0.f;
 	float pingTimer = 0.f;
 	std::atomic<int> currentPing{0};
+	mutable std::mutex pingsmutex;
+	std::unordered_map<uint32_t, int> remotePings;
 	bool disconnectNotified = false;
 	bool isDedicatedServer = false;
 

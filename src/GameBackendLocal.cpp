@@ -89,6 +89,10 @@ public:
 		auto pong = std::make_shared<PongPacket>();
 		pong->timestamp = p->timestamp;
 		peersession->SendPacket(pong);
+
+		if (auto idptr = peersession->template user_pointer<uint32_t>()) {
+			if (*idptr != 0) backend->reportPlayerPing(*idptr, static_cast<int>(p->reportedPing));
+		}
 	}
 
 	void OnPacket(std::shared_ptr<PongPacket> p) {
@@ -141,6 +145,7 @@ static std::shared_ptr<znet::Codec> makeCodec() {
 	codec->Add(PACKET_PING, std::make_unique<PingSerializer>());
 	codec->Add(PACKET_PONG, std::make_unique<PongSerializer>());
 	codec->Add(PACKET_CHAT_MESSAGE, std::make_unique<ChatMessageSerializer>());
+	codec->Add(PACKET_PLAYER_PING_SNAPSHOT, std::make_unique<PlayerPingSnapshotSerializer>());
 
 	// Voice Packets
 	codec->Add(G_TEAM_VOICE_SESSION_PACKET_ID, std::make_unique<gTeamVoiceSessionSerializer>());
@@ -447,6 +452,12 @@ void GameBackendLocal::update(float deltaTime) {
         broadcast(lp);
     }
 
+    pingSnapshotTimer += deltaTime;
+    if (pingSnapshotTimer >= 1.0f) {
+        pingSnapshotTimer = 0.0f;
+        broadcastPingSnapshot();
+    }
+
     if (!isDedicatedServer) {
         voiceClient.updateNetwork([this](const gTeamVoiceUplinkPacket& packet) {
             voiceRouter.handleVoicePacket(LOCAL_HOST_VOICE_CONN_ID, packet);
@@ -622,6 +633,28 @@ void GameBackendLocal::broadcastKillEvent(uint32_t killerId, uint32_t victimId) 
 	auto p = std::make_shared<PlayerKilledPacket>();
 	p->killerId = killerId;
 	p->victimId = victimId;
+	broadcast(p);
+}
+
+void GameBackendLocal::reportPlayerPing(uint32_t playerId, int pingMs) {
+	std::lock_guard<std::mutex> lock(hostpingsmutex);
+	hostPlayerPings[playerId] = pingMs;
+}
+
+std::unordered_map<uint32_t, int> GameBackendLocal::getRemotePings() const {
+	std::lock_guard<std::mutex> lock(hostpingsmutex);
+	return hostPlayerPings;
+}
+
+void GameBackendLocal::broadcastPingSnapshot() {
+	auto p = std::make_shared<PlayerPingSnapshotPacket>();
+	{
+		std::lock_guard<std::mutex> lock(hostpingsmutex);
+		for (auto& kv : hostPlayerPings) {
+			p->playerIds.push_back(kv.first);
+			p->playerPings.push_back(static_cast<uint32_t>(kv.second));
+		}
+	}
 	broadcast(p);
 }
 

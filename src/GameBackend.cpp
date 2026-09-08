@@ -124,6 +124,16 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 		return;
 	}
 
+	if (packet->id() == PACKET_PLAYER_PING_SNAPSHOT) {
+		auto p = std::static_pointer_cast<PlayerPingSnapshotPacket>(packet);
+		std::lock_guard<std::mutex> lock(pingsmutex);
+		remotePings.clear();
+		for (size_t i = 0; i < p->playerIds.size(); i++) {
+			remotePings[p->playerIds[i]] = static_cast<int>(p->playerPings[i]);
+		}
+		return;
+	}
+
 	if (packet->id() == PACKET_NODE_STATE) {
 		auto ev = std::static_pointer_cast<NodeStatePacket>(packet);
 
@@ -396,6 +406,7 @@ void GameBackend::update(float deltaTime) {
 				uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 				auto ping = std::make_shared<PingPacket>();
 				ping->timestamp = now;
+				ping->reportedPing = static_cast<uint32_t>(std::max(0, currentPing.load(std::memory_order_relaxed)));
 				sendPacket(ping);
 			}
 		}
@@ -505,4 +516,9 @@ void GameBackend::onPongReceived(uint64_t timestamp) {
 	uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	int rtt = (now >= timestamp) ? static_cast<int>(now - timestamp) : 0;
 	currentPing.store(rtt, std::memory_order_relaxed);
+}
+
+std::unordered_map<uint32_t, int> GameBackend::getRemotePings() const {
+	std::lock_guard<std::mutex> lock(pingsmutex);
+	return remotePings;
 }
