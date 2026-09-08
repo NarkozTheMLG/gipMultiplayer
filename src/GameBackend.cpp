@@ -97,6 +97,7 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 		for (auto it = roomPlayers.begin(); it != roomPlayers.end(); ++it) {
 			if (it->id == p->netid) {
 				roomPlayers.erase(it);
+				chatRateStamps.erase(p->netid);
 				publishPlayerCount();
 				broadcastLobbyState();
 				break;
@@ -303,10 +304,18 @@ bool GameBackend::shouldDisplayChat(const std::shared_ptr<ChatMessagePacket>& p)
 	uint32_t localId = NetworkSynchronizer::getInstance()->getLocalNodeId();
 	if (p->channel == CHAT_ALL) return true;
 	if (p->channel == CHAT_TEAM) {
+		// localTeam only tracks in-match team assignment; the lobby's team
+		// switch updates roomPlayers alone. Resolving both sides from
+		// roomPlayers is the only way this is correct in the lobby, and it also
+		// makes a dedicated server (on no team, absent from roomPlayers) fall
+		// through to false instead of matching everyone by localTeam's default.
+		uint8_t senderTeam = 0, myTeam = 0;
+		bool sfound = false, mfound = false;
 		for (const auto& rp : roomPlayers) {
-			if (rp.id == p->senderId) return rp.team == localTeam;
+			if (rp.id == p->senderId) { senderTeam = rp.team; sfound = true; }
+			if (rp.id == localId)     { myTeam = rp.team;     mfound = true; }
 		}
-		return false;
+		return sfound && mfound && senderTeam == myTeam;
 	}
 	if (p->channel == CHAT_PRIVATE) return p->targetId == localId || p->senderId == localId;
 	return false;

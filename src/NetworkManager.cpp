@@ -237,6 +237,11 @@ uint64_t NetworkManager::beginJoin() {
         backend.reset();
         generation = ++joinGeneration;
     }
+    // Every host or join attempt starts here, so this is the one chokepoint
+    // that always runs before a new session's packets can arrive - a kick or
+    // a dropped connection skips disconnect()'s wantsDisconnect branch, but
+    // never skips this.
+    ChatManager::getInstance()->clear();
     return generation;
 }
 

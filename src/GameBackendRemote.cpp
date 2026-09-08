@@ -9,7 +9,7 @@
 class ClientPacketHandler : public znet::PacketHandler<ClientPacketHandler,
 	NodeStatePacket, NodeLeavePacket, PlayerFirePacket, PlayerHitPacket, PlayerKilledPacket,
 	LobbyStatePacket, StartMatchPacket, LobbyKickPacket, KeepAlivePacket, PingPacket, PongPacket,
-	gTeamVoiceSessionPacket, gTeamVoiceDownlinkPacket> {
+	ChatMessagePacket, gTeamVoiceSessionPacket, gTeamVoiceDownlinkPacket> {
 public:
 	ClientPacketHandler(GameBackendRemote* b) : backend(b) {}
 
@@ -26,6 +26,7 @@ public:
 	void OnPacket(std::shared_ptr<StartMatchPacket> p) {backend->enqueuePacket(std::static_pointer_cast<znet::Packet>(p));}
 	void OnPacket(std::shared_ptr<LobbyKickPacket> p) {backend->enqueuePacket(std::static_pointer_cast<znet::Packet>(p));}
 	void OnPacket(std::shared_ptr<KeepAlivePacket> p) {backend->enqueuePacket(std::static_pointer_cast<znet::Packet>(p));}
+	void OnPacket(std::shared_ptr<ChatMessagePacket> p) {backend->enqueuePacket(std::static_pointer_cast<znet::Packet>(p));}
 
 	void OnPacket(std::shared_ptr<PingPacket> p) {
 		auto pong = std::make_shared<PongPacket>();
