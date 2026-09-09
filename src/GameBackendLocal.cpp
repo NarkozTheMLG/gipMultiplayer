@@ -52,6 +52,7 @@ public:
 		res->format = std::to_string(teamSize) + "v" + std::to_string(teamSize);
 		res->sizeStr = std::to_string(backend->playerCount()) + "/" + std::to_string(teamSize * 2);
 		res->isDedicated = backend->isDedicatedServer;
+		res->matchInProgress = backend->matchInProgress;
 
 		if (peersession->SendPacket(res) != znet::Result::Success) {
 			gLogw("GameBackendLocal") << "Failed to send the query response";
@@ -292,7 +293,10 @@ std::shared_ptr<gMasterRegisterPacket> GameBackendLocal::makeRegisterPacket() co
     reg->name = serverName;
     reg->currentPlayers = playerCount();
     reg->maxPlayers = NetworkManager::getInstance()->getLobbyTeamSize() * 2;
-    reg->matchState = 0;
+    // The master stores this, returns it in the server list and can filter on
+    // it; hardcoding 0 left every lobby looking idle forever. The heartbeat
+    // resends this packet, so the state follows the match.
+    reg->matchState = matchInProgress ? 1 : 0;
     reg->isPrivate = isPrivateServer;
     reg->hasPassword = !serverPassword.empty();
     reg->isDedicated = isDedicatedServer;
@@ -577,6 +581,7 @@ void GameBackendLocal::broadcastKillEvent(uint32_t killerId, uint32_t victimId) 
 void GameBackendLocal::broadcastLobbyState() {
 	auto p = std::make_shared<LobbyStatePacket>();
 	p->isGlobalServer = this->isDedicatedServer;
+	p->matchInProgress = this->matchInProgress;
 	p->roomCode = roomCode();
 	for (auto& rp : roomPlayers) {
 		p->playerIds.push_back(rp.id);

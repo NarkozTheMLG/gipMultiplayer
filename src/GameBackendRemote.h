@@ -77,6 +77,9 @@ private:
 	
 	std::mutex sessionmutex;
 	std::shared_ptr<znet::PeerSession> session;
+	// Set once a session has been adopted, so update() can tell "not connected
+	// yet" apart from "the session we had has died".
+	bool sessionadopted = false;
 	std::vector<std::shared_ptr<znet::Packet>> pendingPackets;
 
 	gTeamVoice voiceClient;

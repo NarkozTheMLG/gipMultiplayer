@@ -250,6 +250,7 @@ public:
 	std::string format;
 	std::string sizeStr;
     bool isDedicated = false;
+    bool matchInProgress = false;
 };
 
 class ServerQueryResSerializer : public znet::PacketSerializer<ServerQueryResPacket> {
@@ -259,6 +260,7 @@ public:
 		b->WriteString(p->format);
 		b->WriteString(p->sizeStr);
         b->WriteInt(p->isDedicated ? 1 : 0);
+        b->WriteInt(p->matchInProgress ? 1 : 0);
 		return b;
 	}
 	std::shared_ptr<ServerQueryResPacket> DeserializeTyped(std::shared_ptr<znet::Buffer> b) override {
@@ -267,6 +269,7 @@ public:
 		p->format = b->ReadString();
 		p->sizeStr = b->ReadString();
         p->isDedicated = b->ReadInt<int>() != 0;
+        p->matchInProgress = b->ReadInt<int>() != 0;
 		return p;
 	}
 };
@@ -300,6 +303,7 @@ class LobbyStatePacket : public znet::Packet {
 public:
 	LobbyStatePacket() : Packet(PACKET_LOBBY_STATE) {}
 	bool isGlobalServer = false;
+	bool matchInProgress = false;
 	std::string roomCode = "";
 	std::vector<uint32_t> playerIds;
 	std::vector<std::string> playerNames;
@@ -311,6 +315,7 @@ class LobbyStateSerializer : public znet::PacketSerializer<LobbyStatePacket> {
 public:
 	std::shared_ptr<znet::Buffer> SerializeTyped(std::shared_ptr<LobbyStatePacket> p, std::shared_ptr<znet::Buffer> b) override {
 		b->WriteBool(p->isGlobalServer);
+		b->WriteBool(p->matchInProgress);
 		b->WriteString(p->roomCode);
 		b->WriteVarInt(p->playerIds.size());
 		for (size_t i = 0; i < p->playerIds.size(); i++) {
@@ -324,6 +329,7 @@ public:
 	std::shared_ptr<LobbyStatePacket> DeserializeTyped(std::shared_ptr<znet::Buffer> b) override {
 		auto p = std::make_shared<LobbyStatePacket>();
 		p->isGlobalServer = b->ReadBool();
+		p->matchInProgress = b->ReadBool();
 		p->roomCode = b->ReadString();
 		size_t count = b->ReadVarInt<size_t>();
 		// Six bytes an entry at the very least, so a bigger count is corrupt.

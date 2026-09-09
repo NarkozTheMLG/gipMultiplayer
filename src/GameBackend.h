@@ -111,6 +111,7 @@ public:
 	};
 	// Main thread only. Off it, read playerCount() instead.
 	std::vector<RoomPlayerState> roomPlayers;
+	bool matchInProgress = false;
 	virtual void broadcastLobbyState() = 0;
 
 	// roomPlayers.size(), safe to read from a network thread.
@@ -177,6 +178,9 @@ protected:
 		uint8_t targetAnimState = 0;
 		uint8_t localAnimState = 0;
 	};
+	// nodesmutex guards the nodes map and every NetNode in it. Never hold it
+	// while invoking a callback or sending a packet.
+	mutable std::mutex nodesmutex;
 	std::unordered_map<uint32_t, NetNode> nodes;
 
 	// Kept in step with roomPlayers by publishPlayerCount().

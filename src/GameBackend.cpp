@@ -27,16 +27,29 @@ void GameBackend::setOnDisconnected(std::function<void()> cb) {
 	ondisconnected = std::move(cb);
 }
 
+// znet raises its connection events on the network thread, so both of these
+// have to hop to update() before they reach game or UI state. Without that the
+// disconnect handler builds a canvas off the render thread, which allocates
+// textures and buffers with no GL context bound.
 void GameBackend::notifyConnected() {
-	if (onconnected) onconnected();
+	runOnMainThread([this]() {
+		if (onconnected) onconnected();
+	});
 }
 
 void GameBackend::notifyDisconnected() {
-	if (ondisconnected) ondisconnected();
+	runOnMainThread([this]() {
+		// update()'s keepalive timeout reaches the same callback, and the game
+		// only expects to hear about a disconnect once.
+		if (disconnectNotified) return;
+		disconnectNotified = true;
+		if (ondisconnected) ondisconnected();
+	});
 }
 
 void GameBackend::attachNode(uint32_t netid, std::shared_ptr<gNode> node, bool local) {
 	if (!node) return;
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	NetNode entry;
 	entry.local = local;
 	// Without this a remote node lerps in from the origin until its first state packet.
@@ -48,6 +61,7 @@ void GameBackend::attachNode(uint32_t netid, std::shared_ptr<gNode> node, bool l
 }
 
 void GameBackend::detachNode(uint32_t netid) {
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	nodes.erase(netid);
 }
 
@@ -65,8 +79,12 @@ void GameBackend::setOnLeave(std::function<void(uint32_t)> cb) {
 
 // Handled by main thread via gipNetworkBackend::update(deltaTime)
 void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
+	// Any packet at all proves the peer is alive. Keying liveness on keepalives
+	// alone meant a host busy loading a map - which blocks its main thread for
+	// well over the timeout - looked dead to a client that had already finished
+	// loading, and the client kicked itself the moment the match began.
+	timeSinceLastKeepAlive = 0.0f;
 	if (packet->id() == PACKET_KEEPALIVE) {
-		timeSinceLastKeepAlive = 0.0f;
 		return;
 	}
 
@@ -109,25 +127,35 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 
 		// If this node ID hasn't been seen before, fire onJoin so the user
 		// can create a visual and attachNode for it.
-		auto it = nodes.find(ev->netid);
-		if (it == nodes.end()) {
-			if (onjoin) onjoin(ev->netid);
-			it = nodes.find(ev->netid);
-			if (it == nodes.end()) return;
+		// onjoin calls back into attachNode, so nodesmutex must not be held
+		// across it.
+		bool known;
+		{
+			std::lock_guard<std::mutex> lock(nodesmutex);
+			known = nodes.find(ev->netid) != nodes.end();
 		}
+		if (!known && onjoin) onjoin(ev->netid);
 
-		// Set target position for remote nodes instead of snapping them instantly
-		if (!it->second.local) {
-			it->second.targetX = ev->x;
-			it->second.targetY = ev->y;
-			it->second.targetZ = ev->z;
-			it->second.targetYaw = ev->yaw;
-			it->second.targetAnimState = ev->animState;
-			if (it->second.team != ev->team) {
-				it->second.team = ev->team;
-				if (onteamchanged) onteamchanged(ev->netid, ev->team);
+		bool teamchanged = false;
+		{
+			std::lock_guard<std::mutex> lock(nodesmutex);
+			auto it = nodes.find(ev->netid);
+			if (it == nodes.end()) return;
+
+			// Set target position for remote nodes instead of snapping them instantly
+			if (!it->second.local) {
+				it->second.targetX = ev->x;
+				it->second.targetY = ev->y;
+				it->second.targetZ = ev->z;
+				it->second.targetYaw = ev->yaw;
+				it->second.targetAnimState = ev->animState;
+				if (it->second.team != ev->team) {
+					it->second.team = ev->team;
+					teamchanged = true;
+				}
 			}
 		}
+		if (teamchanged && onteamchanged) onteamchanged(ev->netid, ev->team);
 		return;
 	}
 
@@ -144,6 +172,14 @@ void GameBackend::onPacketReceived(std::shared_ptr<znet::Packet> packet) {
 	}
 
 	if (packet->id() == PACKET_START_MATCH) {
+		matchInProgress = true;
+		// The host is exempt from the ready-gate and never toggles its own
+		// isReady, so without this its lobby-list entry would show "Not
+		// Ready"/"In Lobby" forever even while the match is running.
+		if (isServer()) {
+			for (auto& rp : roomPlayers) rp.isReady = true;
+			broadcastLobbyState();
+		}
 		if (onMatchStarted) onMatchStarted();
 		return;
 	}
@@ -243,6 +279,20 @@ void GameBackend::update(float deltaTime) {
 		task();
 	}
 
+	// A level load blocks the main thread for seconds, and the whole stall
+	// arrives as one huge deltaTime. Counting that as network silence tripped
+	// the timeout below on a host that was perfectly alive, which latched
+	// disconnectNotified at match start and left the client deaf for the rest
+	// of the session. A stalled frame resets the clocks instead of advancing
+	// them; no packet could have arrived while the thread was blocked anyway.
+	static constexpr float STALLED_FRAME_SECONDS = 0.25f;
+	if (deltaTime > STALLED_FRAME_SECONDS) {
+		keepAliveTimer = 0.0f;
+		timeSinceLastKeepAlive = 0.0f;
+		pingTimer = 0.0f;
+		return;
+	}
+
 	// Both directions send them: the client to time out a silent host, the
 	// host to keep every NAT mapping open.
 	if (!disconnectNotified) {
@@ -255,7 +305,9 @@ void GameBackend::update(float deltaTime) {
 
 	if (!isServer()) {
 		timeSinceLastKeepAlive += deltaTime;
-		if (timeSinceLastKeepAlive > 3.0f && !disconnectNotified) {
+		// Comfortably past the worst honest stall, and still under znet's own
+		// 10s session timeout so the transport is not the last to notice.
+		if (timeSinceLastKeepAlive > 8.0f && !disconnectNotified) {
 			disconnectNotified = true;
 			if (ondisconnected) ondisconnected();
 			return;
@@ -276,54 +328,75 @@ void GameBackend::update(float deltaTime) {
 	}
 
 	// Ease remote nodes toward the last position we heard about
-	for (auto& kv : nodes) {
-		if (!kv.second.local) {
-			float curX = kv.second.node->getPosX();
-			float curY = kv.second.node->getPosY();
-			float curZ = kv.second.node->getPosZ();
+	{
+		std::lock_guard<std::mutex> lock(nodesmutex);
+		for (auto& kv : nodes) {
+			if (!kv.second.local) {
+				float curX = kv.second.node->getPosX();
+				float curY = kv.second.node->getPosY();
+				float curZ = kv.second.node->getPosZ();
 
-			// Simple Lerp: start + (end - start) * factor
-			float lerpFactor = 15.0f * deltaTime;
-			if (lerpFactor > 1.0f) lerpFactor = 1.0f;
+				// Simple Lerp: start + (end - start) * factor
+				float lerpFactor = 15.0f * deltaTime;
+				if (lerpFactor > 1.0f) lerpFactor = 1.0f;
 
-			kv.second.node->setPosition(
-				curX + (kv.second.targetX - curX) * lerpFactor,
-				curY + (kv.second.targetY - curY) * lerpFactor,
-				curZ + (kv.second.targetZ - curZ) * lerpFactor
-			);
+				kv.second.node->setPosition(
+					curX + (kv.second.targetX - curX) * lerpFactor,
+					curY + (kv.second.targetY - curY) * lerpFactor,
+					curZ + (kv.second.targetZ - curZ) * lerpFactor
+				);
+			}
 		}
 	}
 
-	// Send each local node's position, throttled to a fixed network tick rate
+	// Send each local node's position, throttled to a fixed network tick rate.
+	// Collected under the lock and sent outside it, so a send never blocks a
+	// reader on another thread.
 	networkTimer += deltaTime;
 	if (networkTimer >= 0.05f) {
 		networkTimer = 0.f;
 
-		for (auto& kv : nodes) {
-			if (!kv.second.local) continue;
+		struct LocalNodeState {
+			uint32_t netid;
+			float x, y, z, yaw;
+			uint8_t animState;
+		};
+		std::vector<LocalNodeState> locals;
+		{
+			std::lock_guard<std::mutex> lock(nodesmutex);
+			for (auto& kv : nodes) {
+				if (!kv.second.local) continue;
+				locals.push_back({kv.first, kv.second.node->getPosX(), kv.second.node->getPosY(),
+				                  kv.second.node->getPosZ(), kv.second.localYaw, kv.second.localAnimState});
+			}
+		}
 
-			broadcastState(kv.first, kv.second.node->getPosX(), kv.second.node->getPosY(),
-			               kv.second.node->getPosZ(), kv.second.localYaw, localTeam, kv.second.localAnimState);
+		for (const auto& local : locals) {
+			broadcastState(local.netid, local.x, local.y, local.z, local.yaw, localTeam, local.animState);
 		}
 	}
 }
 
 void GameBackend::setLocalYaw(uint32_t netId, float yaw) {
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	auto it = nodes.find(netId);
 	if (it != nodes.end()) it->second.localYaw = yaw;
 }
 
 float GameBackend::getRemoteYaw(uint32_t netId) {
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	auto it = nodes.find(netId);
 	return it != nodes.end() ? it->second.targetYaw : 0.0f;
 }
 
 void GameBackend::setLocalAnimState(uint32_t netId, uint8_t animState) {
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	auto it = nodes.find(netId);
 	if (it != nodes.end()) it->second.localAnimState = animState;
 }
 
 uint8_t GameBackend::getRemoteAnimState(uint32_t netId) {
+	std::lock_guard<std::mutex> lock(nodesmutex);
 	auto it = nodes.find(netId);
 	return it != nodes.end() ? it->second.targetAnimState : 0;
 }

@@ -156,6 +156,7 @@ void GameBackendRemote::adoptSession(const std::shared_ptr<znet::PeerSession>& s
 	{
 		std::lock_guard<std::mutex> lk(sessionmutex);
 		session = sess;
+		sessionadopted = true;
 		queued.swap(pendingPackets);
 	}
 	for (auto& p : queued) {
@@ -238,6 +239,13 @@ void GameBackendRemote::update(float deltaTime) {
 	}
 	if (currentSession && currentSession->IsAlive()) {
 		voiceClient.updateNetwork(*currentSession);
+	} else if (sessionadopted && !disconnectNotified) {
+		// A punched session is handed to us already connected, so start() never
+		// builds a znet::Client and nothing raises ClientDisconnectedFromServerEvent
+		// for it. Without this the host going away is invisible here and the match
+		// runs on against a server that is gone. Mirrors the host's own dead-session
+		// sweep in GameBackendLocal::update().
+		notifyDisconnected();
 	}
 }
 

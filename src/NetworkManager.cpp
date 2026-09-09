@@ -203,27 +203,51 @@ std::shared_ptr<GameBackend> NetworkManager::getBackend() const {
 void NetworkManager::useBackend(std::shared_ptr<GameBackend> next) {
     beginJoin();
     wantsDisconnect = false;
+    disconnectPending = false;
     setBackend(std::move(next));
 }
 
 void NetworkManager::setBackend(std::shared_ptr<GameBackend> next) {
-    std::lock_guard<std::mutex> lk(backendMutex);
-    backend = std::move(next);
+    // Held only long enough to swap. The old backend dies after the lock is
+    // released: ~GameBackend joins znet threads, and those threads reach
+    // getBackend() and want this same mutex. Destroying it under the lock
+    // deadlocks the join against them and hangs the main loop for good.
+    std::shared_ptr<GameBackend> previous;
+    {
+        std::lock_guard<std::mutex> lk(backendMutex);
+        previous = std::move(backend);
+        backend = std::move(next);
+    }
 }
 
 // Abandons any join still in flight, so its result is discarded instead of
 // replacing whatever happens next.
 uint64_t NetworkManager::beginJoin() {
-    std::lock_guard<std::mutex> lk(backendMutex);
-    backend.reset();
-    return ++joinGeneration;
+    // Same reason as setBackend: released before the old backend is destroyed.
+    std::shared_ptr<GameBackend> previous;
+    uint64_t generation;
+    {
+        std::lock_guard<std::mutex> lk(backendMutex);
+        // Starting fresh: a pending disconnect belongs to the connection being
+        // abandoned, not to the one about to be made.
+        disconnectPending = false;
+        previous = std::move(backend);
+        backend.reset();
+        generation = ++joinGeneration;
+    }
+    return generation;
 }
 
 // Installs only if no newer attempt has started since.
 bool NetworkManager::installBackend(std::shared_ptr<GameBackend> next, uint64_t generation) {
-    std::lock_guard<std::mutex> lk(backendMutex);
-    if (generation != joinGeneration) return false;
-    backend = std::move(next);
+    // Same reason as setBackend: released before the old backend is destroyed.
+    std::shared_ptr<GameBackend> previous;
+    {
+        std::lock_guard<std::mutex> lk(backendMutex);
+        if (generation != joinGeneration) return false;
+        previous = std::move(backend);
+        backend = std::move(next);
+    }
     return true;
 }
 
@@ -235,7 +259,10 @@ void NetworkManager::wireBackend(const std::shared_ptr<GameBackend>& next) {
         if (onLobbyStateUpdated) onLobbyStateUpdated(p);
     });
     next->setOnMatchStarted([this]() { if (onMatchStarted) onMatchStarted(); });
-    next->setOnDisconnected([this]() { if (onDisconnected) onDisconnected(); });
+    next->setOnDisconnected([this]() {
+        if (onDisconnected) onDisconnected();
+        else disconnectPending = true;
+    });
     next->setOnKicked([this](std::string reason) { if (onKicked) onKicked(reason); });
 }
 
@@ -261,7 +288,7 @@ void NetworkManager::update(float deltaTime) {
         batch.swap(pendingQueries);
     }
     for (auto& q : batch) {
-        if (onServerQueried) onServerQueried(q.name, q.format, q.sizeStr, q.ip, q.realIp, q.isDedicated, q.useP2P);
+        if (onServerQueried) onServerQueried(q.name, q.format, q.sizeStr, q.ip, q.realIp, q.isDedicated, q.useP2P, q.matchInProgress);
     }
 }
 
@@ -571,9 +598,10 @@ std::string NetworkManager::getPlayerName(uint32_t netId) const {
 }
 
 void NetworkManager::pushQueryResult(const std::string& name, const std::string& format, const std::string& sizeStr,
-                                     const std::string& ip, const std::string& realIp, bool isDedicated, bool useP2P) {
+                                     const std::string& ip, const std::string& realIp, bool isDedicated, bool useP2P,
+                                     bool matchInProgress) {
     std::lock_guard<std::mutex> lk(queryMutex);
-    pendingQueries.push_back({name, format, sizeStr, ip, realIp, isDedicated, useP2P});
+    pendingQueries.push_back({name, format, sizeStr, ip, realIp, isDedicated, useP2P, matchInProgress});
 }
 
 void NetworkManager::trackQueryClient(std::shared_ptr<znet::Client> client) {
@@ -600,7 +628,7 @@ class QueryHandler : public znet::PacketHandler<QueryHandler, ServerQueryResPack
 public:
     QueryHandler(NetworkManager* n, std::string ipAddr, const std::shared_ptr<znet::PeerSession>& s) : nm(n), ip(std::move(ipAddr)), weakSess(s) {}
     void OnPacket(std::shared_ptr<ServerQueryResPacket> p) {
-        nm->pushQueryResult(p->lobbyName, p->format, p->sizeStr, ip, ip, p->isDedicated, false);
+        nm->pushQueryResult(p->lobbyName, p->format, p->sizeStr, ip, ip, p->isDedicated, false, p->matchInProgress);
         if (auto s = weakSess.lock()) s->Close();
     }
     void OnUnknown(std::shared_ptr<znet::Packet>) {}
@@ -628,8 +656,12 @@ public:
     ServerListHandler(NetworkManager* n, const std::shared_ptr<znet::PeerSession>& s) : nm(n), weakSess(s) {}
     void OnPacket(std::shared_ptr<gMasterSendListPacket> p) {
         for (const auto& s : p->servers) {
+            // Master-listed rows are never re-queried directly (the periodic
+            // refresh in LobbyCanvas::update() skips global search), so without
+            // passing matchState through they showed "Not Started" forever.
             nm->pushQueryResult(s.name, formatTeams(s.maxPlayers), formatSize(s.currentPlayers, s.maxPlayers),
-                                s.roomCode.empty() ? s.ip : s.roomCode, s.ip, s.isDedicated, s.useP2P);
+                                s.roomCode.empty() ? s.ip : s.roomCode, s.ip, s.isDedicated, s.useP2P,
+                                s.matchState != 0);
         }
         if (auto sess = weakSess.lock()) sess->Close();
     }
