@@ -66,4 +66,19 @@ bool isVerboseLogging();
         ::gipmp::mpLogError(mplogstream.str()); \
     } while (false)
 
+/*
+ * Gate for the engine's own logger, for call sites that should keep the
+ * [INFO] Tag: formatting and whatever routing gLogi already has:
+ *
+ *     MP_GLOGI("GameBackendLocal") << "[Host] Punch socket open on " << port;
+ *
+ * Written as if/else rather than a bare if so it cannot swallow a trailing
+ * else at the call site, and so the streamed arguments are not evaluated
+ * while quiet. Warnings keep using gLogw directly: they always print.
+ */
+#define MP_GLOGI(tag)                     \
+    if (!::gipmp::isVerboseLogging()) {   \
+    } else                                \
+        gLogi(tag)
+
 #endif  // GIPMULTIPLAYER_MULTIPLAYERLOG_H
