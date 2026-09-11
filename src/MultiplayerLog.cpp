@@ -20,14 +20,28 @@ std::mutex& outputMutex() {
     return mutex;
 }
 
-const char* levelPrefix(znet::LogLevel level) {
+/*
+ * znet colours its own output by baking escapes into the format string, which
+ * a sink never sees: it is handed the message as plain text so that a
+ * structured logger downstream is not left parsing escapes back out. Printing
+ * to a console, the colours are worth keeping, so the same scheme is rebuilt
+ * here: the level on a coloured background, the function in magenta, and the
+ * message itself red for warnings and errors.
+ */
+struct LevelStyle {
+    const char* label;
+    const char* labelColor;
+    const char* messageColor;
+};
+
+LevelStyle styleFor(znet::LogLevel level) {
     switch (level) {
-        case znet::LogLevel::Debug: return "[debug]";
-        case znet::LogLevel::Info:  return "[info ]";
-        case znet::LogLevel::Warn:  return "[warn ]";
-        case znet::LogLevel::Error: return "[error]";
+        case znet::LogLevel::Debug: return {"[debug]", "\x1b[44m", "\x1b[0m"};
+        case znet::LogLevel::Info:  return {"[info ]", "\x1b[42m", "\x1b[0m"};
+        case znet::LogLevel::Warn:  return {"[warn ]", "\x1b[41m", "\x1b[31m"};
+        case znet::LogLevel::Error: return {"[error]", "\x1b[41m", "\x1b[31m"};
     }
-    return "[?????]";
+    return {"[?????]", "\x1b[45m", "\x1b[0m"};
 }
 
 /*
@@ -43,9 +57,12 @@ void writeZnetRecord(znet::LogLevel level, const char* function,
         return;
     }
 
+    const LevelStyle style = styleFor(level);
     std::lock_guard<std::mutex> lock(outputMutex());
-    std::cout << levelPrefix(level) << " " << (function != nullptr ? function : "")
-              << ": " << (message != nullptr ? message : "") << std::endl;
+    std::cout << style.labelColor << style.label << "\x1b[0m "
+              << "\x1b[35m" << (function != nullptr ? function : "") << ": "
+              << style.messageColor << (message != nullptr ? message : "")
+              << "\x1b[0m" << std::endl;
 }
 
 /*
