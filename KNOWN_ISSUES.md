@@ -88,6 +88,33 @@ continues the znet-side work with the team.
 - **Fix direction:** enforce a minimum length (e.g. 8 chars); reject the
   worst common passwords.
 
+### Auto-login rejected with "session expired"
+- **Where:** `MasterMain.cpp`, `CreateSessionForUser()` and the
+  `gMasterUserTokenLoginPacket` handler.
+- **Symptom:** a saved session is refused on the next launch with "Session
+  expired or invalid. Please log in.", and the master logs `[MasterServer]
+  Session token rejected for: <email>`.
+- **Ruled out:** the client side works. `saved_auth.dat` decrypts (the
+  message only exists server-side, so the token did reach the master and
+  was rejected on its merits), the email is lowercased on both sides before
+  `LOWER(U.email) = ?`, and the raw-token/`SHA256`-at-rest split matches
+  between `CreateSessionForUser()` and the token-login query. A password
+  login also mints a fresh token and overwrites the file, so a stale token
+  cannot explain a failure on the launch right after a successful login.
+- **Leading suspect:** `CreateSessionForUser()` does not check what
+  `sqlite3_step()` returned before returning the raw token. `token_hash` is
+  `UNIQUE NOT NULL` and `user_id` carries a foreign key, so a refused
+  insert still hands the client a token the `SESSIONS` table never stored —
+  which fails on every later auto-login, permanently.
+- **Also possible:** `sqlite3_open("users.db")` is relative to the working
+  directory, so starting the master from elsewhere silently opens a new
+  empty database. Password login failing too would point here rather than
+  at the insert.
+- **Fix direction:** check the `sqlite3_step()` result in
+  `CreateSessionForUser()`, return an empty token when the insert fails so
+  the client does not save one, and log `sqlite3_errmsg()`. Resolve the
+  database path against a known directory rather than the working one.
+
 ## Resolved
 
 Kept for reference so the root cause isn't lost and isn't reintroduced.
